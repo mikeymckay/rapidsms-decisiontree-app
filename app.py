@@ -6,6 +6,8 @@ from rapidsms.models import Connection
 from rapidsms.messages import OutgoingMessage
 from models import *
 
+from django.utils.translation import ugettext as _
+
 class App(AppBase):
     
     registered_functions = {}
@@ -23,28 +25,39 @@ class App(AppBase):
         # just search for triggers and return
         sessions = Session.objects.all().filter(state__isnull=False)\
             .filter(connection=msg.connection)
+
         if not sessions:
+            self.debug("No session found")
             try:
                 tree = Tree.objects.get(trigger=msg.text)
                 # start a new session for this person and save it
                 self.start_tree(tree, msg.connection, msg)
                 return True
-            # no trigger found? no big deal. the
-            # message is probably for another app
+            # no trigger found? 
+            # put them on the default tree - changed by Mike
             except Tree.DoesNotExist:
-                return False
+                self.debug("No trigger found using default")
+                tree = Tree.objects.get(trigger="default")
+                # start a new session for this person and save it
+                self.start_tree(tree, msg.connection, msg)
+                return True
         
         # the caller is part-way though a question
         # tree, so check their answer and respond
         else:
             session = sessions[0]
             state = session.state
-            
+
             self.debug(state)
             # loop through all transitions starting with  
             # this state and try each one depending on the type
             # this will be a greedy algorithm and NOT safe if 
             # multiple transitions can match the same answer
+
+            if msg.text == "reset":
+              self._end_session(session)
+              return True
+
             transitions = Transition.objects.filter(current_state=state)
             found_transition = None
             for transition in transitions:
@@ -63,7 +76,11 @@ class App(AppBase):
                 # there are no defined answers.  therefore there are no more questions to ask 
                 if len(transitions) == 0:
                     # send back some precanned response
-                    msg.respond(self.last_message)
+                    #msg.respond(self.last_message)
+                    #msg.respond(session.tree.completion_text)
+                    person = Entry.objects.filter(session=session,sequence_id=1)[0].text
+                    location = Entry.objects.filter(session=session,sequence_id=4)[0].text
+                    msg.respond(_("Thank you for reporting this incident. You and ") + "3" + _(" other people have reported on ") + person + _(" in ") + location + _("."))
                     # end the connection so the caller can start a new session
                     self._end_session(session)
                     return
@@ -123,6 +140,11 @@ class App(AppBase):
                 self._end_session(session)
                 if session.tree.completion_text:
                     msg.respond(session.tree.completion_text)
+                else:
+                    person = Entry.objects.filter(session=session,sequence_id=1)[0].text
+                    location = Entry.objects.filter(session=session,sequence_id=4)[0].text
+                    msg.respond(_("Thank you for reporting this incident. You and ") + "3" + _(" other people have reported on ") + person + _(" in ") + location + _("."))
+                    # end the connection so the caller can start a new session
                 
             # if there is a next question ready to ask
             # send it along
