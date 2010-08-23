@@ -8,6 +8,8 @@ from models import *
 
 from django.utils.translation import ugettext as _
 
+from afghansms_extensions.models import Report
+
 class App(AppBase):
     
     registered_functions = {}
@@ -34,10 +36,17 @@ class App(AppBase):
                 self.start_tree(tree, msg.connection, msg)
                 return True
             # no trigger found? 
-            # put them on the default tree - changed by Mike
+            # put them on a default tree - changed by Mike
             except Tree.DoesNotExist:
-                self.debug("No trigger found using default")
-                tree = Tree.objects.get(trigger="default")
+                # This is a hack - the text will only encode in ascii if it doesn't have pashto chars
+                try:
+                  msg.text.encode('ascii')
+                  tree = Tree.objects.get(trigger="default-en")
+                  self.debug("No trigger found using default-en")
+                except UnicodeEncodeError:
+                  tree = Tree.objects.get(trigger="default-pus")
+                  self.debug("No trigger found using default-pus")
+
                 # start a new session for this person and save it
                 self.start_tree(tree, msg.connection, msg)
                 return True
@@ -75,19 +84,16 @@ class App(AppBase):
                 transitions = Transition.objects.filter(current_state=state)
                 # there are no defined answers.  therefore there are no more questions to ask 
                 if len(transitions) == 0:
-                    # send back some precanned response
-                    #msg.respond(self.last_message)
-                    #msg.respond(session.tree.completion_text)
-                    person = Entry.objects.filter(session=session,sequence_id=1)[0].text
-                    location = Entry.objects.filter(session=session,sequence_id=4)[0].text
-                    msg.respond(_("Thank you for reporting this incident. You and ") + "3" + _(" other people have reported on ") + person + _(" in ") + location + _("."))
+                    official_name = Report.objects.get(session=session).official_name
+                    location = Report.objects.get(session=session).location
+                    count = Report.objects.filter(official_name=official_name, location=location).count()
+                    msg.respond(_("Thank you for reporting this incident. You and %s other people have reported on %s in %s.") % (count,official_name,location))
                     # end the connection so the caller can start a new session
                     self._end_session(session)
                     return
                 else:
                     # send them some hints about how to respond
                     if state.question.error_response:
-                        
                         response = state.question.error_response
                     else:
                         flat_answers = " or ".join([trans.answer.helper_text() for trans in transitions])
@@ -137,14 +143,16 @@ class App(AppBase):
             # and also check if the tree has a defined 
             # completion text and if so send it
             if not session.state:
-                self._end_session(session)
                 if session.tree.completion_text:
                     msg.respond(session.tree.completion_text)
                 else:
-                    person = Entry.objects.filter(session=session,sequence_id=1)[0].text
-                    location = Entry.objects.filter(session=session,sequence_id=4)[0].text
-                    msg.respond(_("Thank you for reporting this incident. You and ") + "3" + _(" other people have reported on ") + person + _(" in ") + location + _("."))
-                    # end the connection so the caller can start a new session
+                    official_name = Report.objects.get(session=session).official_name
+                    location = Report.objects.get(session=session).location
+                    count = Report.objects.filter(official_name=official_name, location=location).count()
+                    msg.respond(_("Thank you for reporting this incident. You and %s other people have reported on %s in %s.") % (count,official_name,location))
+
+                # end the connection so the caller can start a new session
+                self._end_session(session)
                 
             # if there is a next question ready to ask
             # send it along
